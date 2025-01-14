@@ -32,7 +32,7 @@ const createTask = async (req, res) => {
 
         res.status(201).json({ message: SUCCESS_MESSAGES.TASK_CREATED, task: newTask });
     } catch (error) {
-        console.error('Error creating task:', error);
+        logger.error(`Error creating task: ${error.message}`);
         res.status(500).json({ error: ERROR_MESSAGES.TASK_CREATION_FAILED });
     }
 };
@@ -81,7 +81,7 @@ const getTasks = async (req, res) => {
             pagination: { totalTasks, totalPages, currentPage: page, limit },
         });
     } catch (error) {
-        console.error('Error getting tasks:', error);
+        logger.error(`Error getting task: ${error.message}`);
         res.status(500).json({ error: ERROR_MESSAGES.UNEXPECTED_ERROR });
     }
 };
@@ -108,7 +108,7 @@ const getTaskById = async (req, res) => {
         if (error.name === JWT_ERROR) {
             return res.status(401).json({ error: ERROR_MESSAGES.INVALID_OR_EXPIRED_TOKEN });
         }
-        console.error('Error fetching task:', error);
+        logger.error(`Error fetching task: ${error.message}`);
         res.status(500).json({ error: ERROR_MESSAGES.UNEXPECTED_ERROR });
     }
 };
@@ -146,7 +146,7 @@ const updateTask = async (req, res) => {
         await writeJsonFile(TASKS_FILE, tasks);
         res.status(200).json({ message: SUCCESS_MESSAGES.TASK_UPDATED, task: updatedTask });
     } catch (error) {
-        console.error('Error updating task:', error);
+        logger.error(`Error updating task: ${error.message}`);
         res.status(500).json({ error: ERROR_MESSAGES.TASK_UPDATE_FAILED });
     }
 };
@@ -170,7 +170,7 @@ const deleteTask = async (req, res) => {
         await writeJsonFile(TASKS_FILE, tasks);
         res.status(200).json({ message: SUCCESS_MESSAGES.TASK_DELETED });
     } catch (error) {
-        console.error('Error deleting task:', error);
+        logger.error(`Error deleting task: ${error.message}`);
         res.status(500).json({ error: ERROR_MESSAGES.TASK_DELETION_FAILED });
     }
 };

@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 const { JWT_SECRET } = process.env;
 const { ERROR_MESSAGES } = require('../constants/app-constants');
+const logger = require('../utils/logger');
 
 const authenticate = (req, res, next) => {
     try {
@@ -13,13 +14,15 @@ const authenticate = (req, res, next) => {
         const decoded = jwt.verify(token, JWT_SECRET);
 
         req.user = decoded; 
+        logger.info(`User authenticated: ${decoded.username}`);
         next(); 
     } catch (error) {
-        if (error.name === 'JsonWebTokenError') {
+        if (error.name === JWT_SECRET) {
+            logger.error('Invalid or expired token');
             return res.status(401).json({ error: ERROR_MESSAGES.INVALID_OR_EXPIRED_TOKEN });
         }
-        console.error('Error authenticating user:', error);
-        res.status(500).json({ error: error });
+        logger.error(`Error authenticating user: ${error.message}`);
+        res.status(500).json({ error: ERROR_MESSAGES.UNEXPECTED_ERROR });
     }
 };
 
