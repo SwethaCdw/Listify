@@ -1,0 +1,178 @@
+const path = require('path');
+const { readJsonFile, writeJsonFile } = require('../utils/fileOperations');
+const { ERROR_MESSAGES, SUCCESS_MESSAGES, PRIORITY_LEVELS, JWT_ERROR } = require('../constants/app-constants');
+
+const TASKS_FILE = path.join(__dirname, '../data/tasks.json');
+
+// Create a new task
+const createTask = async (req, res) => {
+    try {
+        const username = req.user.username;
+        const { title, description, priority, dueDate, comments } = req.body;
+
+        if (!title || !description || !priority || !dueDate) {
+            return res.status(400).json({ error: ERROR_MESSAGES.REQUIRED_FIELDS_MISSING });
+        }
+
+        const newTask = {
+            id: Date.now().toString(),
+            title,
+            description,
+            priority,
+            dueDate,
+            comments,
+            createdAt: new Date().toISOString(),
+        };
+
+        const tasks = await readJsonFile(TASKS_FILE);
+        tasks[username] = tasks[username] || [];
+        tasks[username].push(newTask);
+
+        await writeJsonFile(TASKS_FILE, tasks);
+
+        res.status(201).json({ message: SUCCESS_MESSAGES.TASK_CREATED, task: newTask });
+    } catch (error) {
+        console.error('Error creating task:', error);
+        res.status(500).json({ error: ERROR_MESSAGES.TASK_CREATION_FAILED });
+    }
+};
+
+// Get all tasks (or) filter tasks based on query
+const getTasks = async (req, res) => {
+    try {
+        const { title, priority, dueDate, sortBy, page = 1, limit = 10 } = req.query;
+        const username = req.user.username;
+        console.log("get tasks username", username);
+        
+        let tasks = await readJsonFile(TASKS_FILE);
+        let userTasks = tasks[username];
+
+        if(!userTasks) {
+            return res.status(404).json({ error: 'No tasks for this user' });
+        }
+
+        // Apply filters
+        if (title) userTasks = userTasks.filter(task => task.title.includes(title));
+        if (priority) userTasks = userTasks.filter(task => task.priority === priority);
+        if (dueDate) userTasks = userTasks.filter(task => task.dueDate === dueDate);
+
+        // Sorting logic
+        if (sortBy) {
+            const sortFunctions = {
+                title: (a, b) => a.title.localeCompare(b.title),
+                priority: (a, b) => PRIORITY_LEVELS.indexOf(a.priority) - PRIORITY_LEVELS.indexOf(b.priority),
+                dueDate: (a, b) => new Date(a.dueDate) - new Date(b.dueDate),
+            };
+            if (!sortFunctions[sortBy]) return res.status(400).json({ error: ERROR_MESSAGES.INVALID_SORT_CRITERIA });
+            userTasks.sort(sortFunctions[sortBy]);
+        }
+
+        // Pagination
+        const totalTasks = userTasks.length;
+        const totalPages = Math.ceil(totalTasks / limit);
+        const paginatedTasks = userTasks.slice((page - 1) * limit, page * limit);
+
+        if (!paginatedTasks.length) {
+            return res.status(404).json({ error: ERROR_MESSAGES.TASK_FILTER_NOT_FOUND });
+        }
+
+        res.status(200).json({
+            tasks: paginatedTasks,
+            pagination: { totalTasks, totalPages, currentPage: page, limit },
+        });
+    } catch (error) {
+        console.error('Error getting tasks:', error);
+        res.status(500).json({ error: ERROR_MESSAGES.UNEXPECTED_ERROR });
+    }
+};
+
+// Get task by ID
+const getTaskById = async (req, res) => {
+    try {
+        const username = req.user.username;
+        const { taskId } = req.params;
+
+        if (!taskId) return res.status(400).json({ error: ERROR_MESSAGES.TASK_ID_REQUIRED });
+
+        let tasks = await readJsonFile(TASKS_FILE);
+        let userTasks = tasks[username];        
+        if(!userTasks) {
+            return res.status(404).json({ error: 'No such task for this user' });
+        }
+        const task = userTasks.find(task => task.id === taskId);
+
+        if (!task) return res.status(404).json({ error: ERROR_MESSAGES.TASK_NOT_FOUND });
+
+        res.status(200).json({ task });
+    } catch (error) {
+        if (error.name === JWT_ERROR) {
+            return res.status(401).json({ error: ERROR_MESSAGES.INVALID_OR_EXPIRED_TOKEN });
+        }
+        console.error('Error fetching task:', error);
+        res.status(500).json({ error: ERROR_MESSAGES.UNEXPECTED_ERROR });
+    }
+};
+
+// Update a task
+const updateTask = async (req, res) => {
+    try {
+        const username = req.user.username;
+        const { taskId } = req.params;
+        const { title, description, priority, dueDate, comments } = req.body;
+
+        if (!title || !description || !priority || !dueDate) {
+            return res.status(400).json({ error: ERROR_MESSAGES.REQUIRED_FIELDS_MISSING });
+        }
+
+        const tasks = await readJsonFile(TASKS_FILE);
+        const userTasks = tasks[username];
+
+        if (!userTasks) return res.status(404).json({ error: ERROR_MESSAGES.TASK_NOT_FOUND });
+
+        const taskIndex = userTasks.findIndex(task => task.id === taskId);
+        if (taskIndex === -1) return res.status(404).json({ error: ERROR_MESSAGES.TASK_NOT_FOUND });
+
+        const updatedTask = {
+            ...userTasks[taskIndex],
+            title,
+            description,
+            priority,
+            dueDate,
+            comments,
+            updatedAt: new Date().toISOString(),
+        };
+        userTasks[taskIndex] = updatedTask;
+
+        await writeJsonFile(TASKS_FILE, tasks);
+        res.status(200).json({ message: SUCCESS_MESSAGES.TASK_UPDATED, task: updatedTask });
+    } catch (error) {
+        console.error('Error updating task:', error);
+        res.status(500).json({ error: ERROR_MESSAGES.TASK_UPDATE_FAILED });
+    }
+};
+
+// Delete a task
+const deleteTask = async (req, res) => {
+    try {
+        const username = req.user.username;
+        const { taskId } = req.params;
+
+        const tasks = await readJsonFile(TASKS_FILE);
+        const userTasks = tasks[username];
+
+        if (!userTasks) return res.status(404).json({ error: ERROR_MESSAGES.TASK_NOT_FOUND });
+
+        const taskIndex = userTasks.findIndex(task => task.id === taskId);
+        if (taskIndex === -1) return res.status(404).json({ error: ERROR_MESSAGES.TASK_NOT_FOUND });
+
+        userTasks.splice(taskIndex, 1);
+
+        await writeJsonFile(TASKS_FILE, tasks);
+        res.status(200).json({ message: SUCCESS_MESSAGES.TASK_DELETED });
+    } catch (error) {
+        console.error('Error deleting task:', error);
+        res.status(500).json({ error: ERROR_MESSAGES.TASK_DELETION_FAILED });
+    }
+};
+
+module.exports = { getTasks, getTaskById, createTask, updateTask, deleteTask };
