@@ -1,5 +1,4 @@
 const path = require('path');
-const bcrypt = require('bcrypt');
 const { readJsonFile, writeJsonFile } = require('../utils/fileOperations');
 
 const USERS_FILE = path.join(__dirname, '../data/users.json');

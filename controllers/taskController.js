@@ -1,6 +1,8 @@
 const path = require('path');
 const { readJsonFile, writeJsonFile } = require('../utils/fileOperations');
-const { ERROR_MESSAGES, SUCCESS_MESSAGES, PRIORITY_LEVELS, JWT_ERROR } = require('../constants/app-constants');
+const { TASKS } = require('../constants/app-constants');
+const { sortTasks, filterTasks, paginateTasks, findTaskById } = require('../utils/taskUtils');
+const logger = require('../utils/logger');
 
 const TASKS_FILE = path.join(__dirname, '../data/tasks.json');
 
@@ -11,7 +13,7 @@ const createTask = async (req, res) => {
         const { title, description, priority, dueDate, comments } = req.body;
 
         if (!title || !description || !priority || !dueDate) {
-            return res.status(400).json({ error: ERROR_MESSAGES.REQUIRED_FIELDS_MISSING });
+            return res.status(400).json({ error: TASKS.ERROR_MESSAGES.REQUIRED_FIELDS_MISSING });
         }
 
         const newTask = {
@@ -30,50 +32,44 @@ const createTask = async (req, res) => {
 
         await writeJsonFile(TASKS_FILE, tasks);
 
-        res.status(201).json({ message: SUCCESS_MESSAGES.TASK_CREATED, task: newTask });
+        res.status(201).json({ message: TASKS.SUCCESS_MESSAGES.TASK_CREATED, task: newTask });
     } catch (error) {
         logger.error(`Error creating task: ${error.message}`);
-        res.status(500).json({ error: ERROR_MESSAGES.TASK_CREATION_FAILED });
+        res.status(500).json({ error: TASKS.ERROR_MESSAGES.TASK_CREATION_FAILED });
     }
 };
 
 // Get all tasks (or) filter tasks based on query
 const getTasks = async (req, res) => {
     try {
-        const { title, priority, dueDate, sortBy, page = 1, limit = 10 } = req.query;
+        const { title, priority, dueDate, sortBy, sortOrder = TASKS.SORT_ASC, page = 1, limit = 10 } = req.query;
         const username = req.user.username;
-        console.log("get tasks username", username);
-        
-        let tasks = await readJsonFile(TASKS_FILE);
+
+        const tasks = await readJsonFile(TASKS_FILE);
         let userTasks = tasks[username];
 
-        if(!userTasks) {
-            return res.status(404).json({ error: 'No tasks for this user' });
+        if (!userTasks) {
+            return res.status(404).json({ error: TASKS.ERROR_MESSAGES.NO_TASK });
         }
 
         // Apply filters
-        if (title) userTasks = userTasks.filter(task => task.title.includes(title));
-        if (priority) userTasks = userTasks.filter(task => task.priority === priority);
-        if (dueDate) userTasks = userTasks.filter(task => task.dueDate === dueDate);
+        userTasks = filterTasks(userTasks, { title, priority, dueDate });
 
         // Sorting logic
         if (sortBy) {
             const sortFunctions = {
                 title: (a, b) => a.title.localeCompare(b.title),
-                priority: (a, b) => PRIORITY_LEVELS.indexOf(a.priority) - PRIORITY_LEVELS.indexOf(b.priority),
+                priority: (a, b) => TASKS.PRIORITY_LEVELS.indexOf(a.priority) - TASKS.PRIORITY_LEVELS.indexOf(b.priority),
                 dueDate: (a, b) => new Date(a.dueDate) - new Date(b.dueDate),
             };
-            if (!sortFunctions[sortBy]) return res.status(400).json({ error: ERROR_MESSAGES.INVALID_SORT_CRITERIA });
-            userTasks.sort(sortFunctions[sortBy]);
+            userTasks = sortTasks(userTasks, sortBy, sortOrder, sortFunctions);
         }
 
         // Pagination
-        const totalTasks = userTasks.length;
-        const totalPages = Math.ceil(totalTasks / limit);
-        const paginatedTasks = userTasks.slice((page - 1) * limit, page * limit);
+        const { paginatedTasks, totalTasks, totalPages } = paginateTasks(userTasks, page, limit);
 
         if (!paginatedTasks.length) {
-            return res.status(404).json({ error: ERROR_MESSAGES.TASK_FILTER_NOT_FOUND });
+            return res.status(404).json({ error: TASKS.ERROR_MESSAGES.TASK_FILTER_NOT_FOUND });
         }
 
         res.status(200).json({
@@ -82,7 +78,7 @@ const getTasks = async (req, res) => {
         });
     } catch (error) {
         logger.error(`Error getting task: ${error.message}`);
-        res.status(500).json({ error: ERROR_MESSAGES.UNEXPECTED_ERROR });
+        res.status(500).json({ error: TASKS.ERROR_MESSAGES.UNEXPECTED_ERROR });
     }
 };
 
@@ -92,24 +88,17 @@ const getTaskById = async (req, res) => {
         const username = req.user.username;
         const { taskId } = req.params;
 
-        if (!taskId) return res.status(400).json({ error: ERROR_MESSAGES.TASK_ID_REQUIRED });
+        if (!taskId) return res.status(400).json({ error: TASKS.ERROR_MESSAGES.TASK_ID_REQUIRED });
 
-        let tasks = await readJsonFile(TASKS_FILE);
-        let userTasks = tasks[username];        
-        if(!userTasks) {
-            return res.status(404).json({ error: 'No such task for this user' });
-        }
-        const task = userTasks.find(task => task.id === taskId);
+        const { userTasks, taskIndex } = await findTaskById(username, taskId, TASKS_FILE);
 
-        if (!task) return res.status(404).json({ error: ERROR_MESSAGES.TASK_NOT_FOUND });
-
-        res.status(200).json({ task });
+        res.status(200).json({ task: userTasks[taskIndex] });
     } catch (error) {
-        if (error.name === JWT_ERROR) {
-            return res.status(401).json({ error: ERROR_MESSAGES.INVALID_OR_EXPIRED_TOKEN });
+        if (error.message === TASKS.ERROR_MESSAGES.TASK_NOT_FOUND) {
+            return res.status(404).json({ error: error.message });
         }
         logger.error(`Error fetching task: ${error.message}`);
-        res.status(500).json({ error: ERROR_MESSAGES.UNEXPECTED_ERROR });
+        res.status(500).json({ error: TASKS.ERROR_MESSAGES.UNEXPECTED_ERROR });
     }
 };
 
@@ -121,16 +110,10 @@ const updateTask = async (req, res) => {
         const { title, description, priority, dueDate, comments } = req.body;
 
         if (!title || !description || !priority || !dueDate) {
-            return res.status(400).json({ error: ERROR_MESSAGES.REQUIRED_FIELDS_MISSING });
+            return res.status(400).json({ error: TASKS.ERROR_MESSAGES.REQUIRED_FIELDS_MISSING });
         }
 
-        const tasks = await readJsonFile(TASKS_FILE);
-        const userTasks = tasks[username];
-
-        if (!userTasks) return res.status(404).json({ error: ERROR_MESSAGES.TASK_NOT_FOUND });
-
-        const taskIndex = userTasks.findIndex(task => task.id === taskId);
-        if (taskIndex === -1) return res.status(404).json({ error: ERROR_MESSAGES.TASK_NOT_FOUND });
+        const { tasks, userTasks, taskIndex } = await findTaskById(username, taskId, TASKS_FILE);
 
         const updatedTask = {
             ...userTasks[taskIndex],
@@ -142,12 +125,12 @@ const updateTask = async (req, res) => {
             updatedAt: new Date().toISOString(),
         };
         userTasks[taskIndex] = updatedTask;
-
         await writeJsonFile(TASKS_FILE, tasks);
-        res.status(200).json({ message: SUCCESS_MESSAGES.TASK_UPDATED, task: updatedTask });
+
+        res.status(200).json({ message: TASKS.SUCCESS_MESSAGES.TASK_UPDATED, task: updatedTask });
     } catch (error) {
         logger.error(`Error updating task: ${error.message}`);
-        res.status(500).json({ error: ERROR_MESSAGES.TASK_UPDATE_FAILED });
+        res.status(500).json({ error: TASKS.ERROR_MESSAGES.TASK_UPDATE_FAILED });
     }
 };
 
@@ -157,21 +140,15 @@ const deleteTask = async (req, res) => {
         const username = req.user.username;
         const { taskId } = req.params;
 
-        const tasks = await readJsonFile(TASKS_FILE);
-        const userTasks = tasks[username];
-
-        if (!userTasks) return res.status(404).json({ error: ERROR_MESSAGES.TASK_NOT_FOUND });
-
-        const taskIndex = userTasks.findIndex(task => task.id === taskId);
-        if (taskIndex === -1) return res.status(404).json({ error: ERROR_MESSAGES.TASK_NOT_FOUND });
+        const { tasks, userTasks, taskIndex } = await findTaskById(username, taskId, TASKS_FILE);
 
         userTasks.splice(taskIndex, 1);
-
         await writeJsonFile(TASKS_FILE, tasks);
-        res.status(200).json({ message: SUCCESS_MESSAGES.TASK_DELETED });
+
+        res.status(200).json({ message: TASKS.SUCCESS_MESSAGES.TASK_DELETED });
     } catch (error) {
         logger.error(`Error deleting task: ${error.message}`);
-        res.status(500).json({ error: ERROR_MESSAGES.TASK_DELETION_FAILED });
+        res.status(500).json({ error: TASKS.ERROR_MESSAGES.TASK_DELETION_FAILED });
     }
 };
 
